@@ -1,7 +1,7 @@
-#include maps/mp/zombies/_zm_utility;
-#include common_scripts/utility;
-#include maps/mp/_utility;
-#include scripts/zm/zm_bo2_bots;
+#include maps\mp\zombies\_zm_utility;
+#include common_scripts\utility;
+#include maps\mp\_utility;
+#include scripts\zm\zm_bo2_bots;
 
 bot_combat_think( damage, attacker, direction )
 {

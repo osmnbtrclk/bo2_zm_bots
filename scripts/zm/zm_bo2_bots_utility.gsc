@@ -166,3 +166,15 @@ init()
 {
     level thread on_player_connect();
 }
+
+// Custom implementation of NodeVisible function
+// Checks if two points are visible to each other
+NodeVisible(origin1, origin2)
+{
+    // Add small vertical offset to account for ground level
+    origin1 = origin1 + (0, 0, 10);
+    origin2 = origin2 + (0, 0, 10);
+    
+    // Check line of sight between points
+    return SightTracePassed(origin1, origin2, false, undefined);
+}

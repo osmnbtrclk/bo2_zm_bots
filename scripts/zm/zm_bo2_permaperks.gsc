@@ -8,12 +8,16 @@
 
 init()
 {
+    
+
     // Setup monitoring system
     level.pers_upgrades = [];
     level.pers_upgrades_keys = [];
     
     // Force system to always be active
     level.force_pers_system_active = true;
+    
+    
     
     // Register all permaperks first
     pers_register_upgrade("board", ::pers_upgrade_boards_active, "pers_boarding", 74, 0);
@@ -39,9 +43,10 @@ init()
     if(!isdefined(level.pers_multikill_headshots_required))
         level.pers_multikill_headshots_required = 5;
     if(!isdefined(level.pers_cash_back_num_perks_required))
-        level.pers_cash_back_num_perks_required = 50;
-    if(!isdefined(level.pers_insta_kill_num_required))
+        level.pers_cash_back_num_perks_required = 50;    if(!isdefined(level.pers_insta_kill_num_required))
         level.pers_insta_kill_num_required = 2;
+    if(!isdefined(level.pers_insta_kill_upgrade_active_time))
+        level.pers_insta_kill_upgrade_active_time = 18;
     if(!isdefined(level.pers_jugg_upgrade_health_bonus))
         level.pers_jugg_upgrade_health_bonus = 90;
     if(!isdefined(level.pers_carpenter_zombie_kills))
@@ -96,19 +101,29 @@ on_player_spawned()
     // Wait for player to fully connect
     self waittill("spawned");
     
-    // debug log
-    self iprintlnbold("Activating permaperks for player: " + self.name);
+    // Short delay after spawning
+    wait 0.5; 
     
-    // Initialize globals
+    
+    // Debug log
+    self iprintlnbold("Force activating permaperks (using complete func) for player: " + self.name);
+    
+    // Initialize globals if needed
     self pers_abilities_init_globals();
     
-    // Force unlock all permaperks
+    // Ensure structures exist
+    if(!isDefined(self.pers_upgrades_awarded))
+        self.pers_upgrades_awarded = [];
+    if(!isDefined(self.stats_this_frame))
+        self.stats_this_frame = [];
+
+    // 1. Set all required stats first (as a fallback or requirement for some functions)
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_boarding", level.pers_boarding_number_of_boards_required);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_revivenoperk", level.pers_revivenoperk_number_of_revives_required);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_multikill_headshots", level.pers_multikill_headshots_required);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_cash_back_bought", level.pers_cash_back_num_perks_required);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_insta_kill", level.pers_insta_kill_num_required);
-    self maps\mp\zombies\_zm_stats::set_client_stat("pers_jugg", level.pers_jugg_hit_and_die_total);
+    self maps\mp\zombies\_zm_stats::set_client_stat("pers_jugg", level.pers_jugg_hit_and_die_total); 
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_carpenter", level.pers_carpenter_zombie_kills);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_flopper_counter", level.pers_flopper_counter);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_perk_lose_counter", level.pers_perk_lose_counter);
@@ -118,38 +133,13 @@ on_player_spawned()
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_box_weapon_counter", level.pers_box_weapon_counter);
     self maps\mp\zombies\_zm_stats::set_client_stat("pers_nube_counter", level.pers_nube_counter);
     
-    // Immediately award all perks
-    self.pers_upgrades_awarded = [];
-    self.pers_upgrades_awarded["board"] = 1;
-    self.pers_upgrades_awarded["revive"] = 1;
-    self.pers_upgrades_awarded["multikill_headshots"] = 1;
-    self.pers_upgrades_awarded["cash_back"] = 1;
-    self.pers_upgrades_awarded["insta_kill"] = 1;
-    self.pers_upgrades_awarded["jugg"] = 1;
-    self.pers_upgrades_awarded["carpenter"] = 1;
-    self.pers_upgrades_awarded["flopper"] = 1;
-    self.pers_upgrades_awarded["perk_lose"] = 1;
-    self.pers_upgrades_awarded["pistol_points"] = 1;
-    self.pers_upgrades_awarded["double_points"] = 1;
-    self.pers_upgrades_awarded["sniper"] = 1;
-    self.pers_upgrades_awarded["box_weapon"] = 1;
-    self.pers_upgrades_awarded["nube"] = 1;
+    // Force the system to check stats 
+    self.pers_upgrade_force_test = 1;
     
-    // Start upgrade threads with immediate activation
-    self thread pers_upgrade_jugg_active();  // Start jugg first for health bonus
-    self thread maps\mp\zombies\_zm_perks::perk_set_max_health_if_jugg("jugg_upgrade", 1, 0);
+    // Brief wait 
+    wait 0.1;
+
+   
     
-    self thread pers_upgrade_boards_active();
-    self thread pers_upgrade_revive_active();
-    self thread pers_upgrade_headshot_active();
-    self thread pers_upgrade_cash_back_active();
-    self thread pers_upgrade_insta_kill_active();
-    self thread pers_upgrade_carpenter_active();
-    self thread pers_upgrade_flopper_active();
-    self thread pers_upgrade_perk_lose_active();
-    self thread pers_upgrade_pistol_points_active();
-    self thread pers_upgrade_double_points_active();
-    self thread pers_upgrade_sniper_active();
-    self thread pers_upgrade_box_weapon_active();
-    self thread pers_upgrade_nube_active();
+    self iprintlnbold("All permaperks forcefully activated (using complete func) for " + self.name);
 }

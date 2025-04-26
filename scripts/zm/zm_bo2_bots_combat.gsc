@@ -2,6 +2,7 @@
 #include common_scripts\utility;
 #include maps\mp\_utility;
 #include scripts\zm\zm_bo2_bots;
+#include scripts\zm\zm_bo2_bots_utility; // Added this line
 
 bot_combat_think( damage, attacker, direction )
 {
@@ -20,12 +21,10 @@ bot_combat_think( damage, attacker, direction )
 		if(Distance(self.origin, self.bot.threat.position) <= 75 || isdefined(damage))
 		{
 			nodes = getnodesinradiussorted( self.origin, 1024, 256, 512 );
-			nearest = bot_nearest_node(self.origin);
-			if ( isDefined( nearest ) && !self hasgoal( "flee" ) )
-			{
-				foreach ( node in nodes )
+			nearest = bot_nearest_node(self.origin);			if ( isDefined( nearest ) && !self hasgoal( "flee" ) )
+			{				foreach ( node in nodes )
 				{
-					if ( !nodesvisible( nearest, node ) && FindPath(self.origin, node.origin, undefined, 0, 1) )
+					if ( !NodeVisible( nearest.origin, node.origin ) && FindPath(self.origin, node.origin, undefined, 0, 1) )
 					{
 						self addgoal( node.origin, 24, 4, "flee" );
 						break;

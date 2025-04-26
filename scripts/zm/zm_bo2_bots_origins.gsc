@@ -3,19 +3,31 @@
 #include maps\mp\zombies\_zm_utility;
 #include maps\mp\zombies\_zm_score;
 #include maps\mp\zombies\_zm_laststand;
-#include maps\mp\zm_tomb_capture_zones; // Include the necessary Origins functions
 #include scripts\zm\zm_bo2_bots_combat; // Include combat functions for aiming
 
 init()
 {
     // Initialization logic for Origins bots, if any needed beyond the main script
-    iprintln("^2ZM BO2 Bots: Origins module initialized.");
-    level.generator_cost = maps\mp\zm_tomb_capture_zones::get_generator_capture_start_cost();
+    if (level.script == "zm_tomb")
+    {
+        iprintln("^2ZM BO2 Bots: Origins module initialized.");
+        
+    }
+    else
+    {
+        iprintln("^1ZM BO2 Bots: Origins module not initialized, not in the correct map.");
+        return;
+    }
+       
 }
 
 // Main thinking loop for Origins-specific actions
 bot_origins_think()
 {
+	// Ensure this logic only runs on Origins
+	if (level.script != "zm_tomb")
+		return;
+
     self endon("disconnect");
     self endon("death");
     level endon("game_ended");
@@ -61,7 +73,7 @@ bot_activate_generator()
             return;
 
         // Check if bot has enough points
-        generator_cost = maps\mp\zm_tomb_capture_zones::get_generator_capture_start_cost();
+        generator_cost = 200 * get_players().size;
         if (self.score < generator_cost)
             return;
 

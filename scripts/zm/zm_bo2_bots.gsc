@@ -1,4 +1,3 @@
-#include maps\mp\zm_tomb_capture_zones; // Added include for Origins generator functions
 #include maps\mp\zombies\_zm_utility;
 #include common_scripts\utility;
 #include maps\mp\_utility;
@@ -9,8 +8,6 @@
 #include maps\mp\zombies\_zm_powerups;
 #include scripts\zm\zm_bo2_bots_combat;
 #include scripts\zm\zm_bo2_bots_utility; // Added include for utility functions
-#include scripts\zm\zm_bo2_bots_origins; // Added include for Origins functions
-
 
 
 // Bot action constants
@@ -18,7 +15,6 @@
 #define BOT_ACTION_CROUCH "crouch"
 #define BOT_ACTION_PRONE "prone"
 
-// Modified bot_spawn to handle Origins map
 bot_spawn()
 {
     self bot_spawn_init();
@@ -43,8 +39,10 @@ array_combine(array1, array2)
 
 init()
 {
-    level.player_starting_points = 550 * 400;
+    // level.player_starting_points = 550 * 400;
     bot_set_skill();
+    
+    
 
     // Add debug
     iprintln("^3Waiting for initial blackscreen...");
@@ -68,9 +66,9 @@ init()
     if (!isdefined(level.bots))
         level.bots = [];
 
-    bot_amount = GetDvarIntDefault("bo2_zm_bots_count", 10);
-    if(bot_amount > (8-get_players().size))
-        bot_amount = 8 - get_players().size;
+    bot_amount = GetDvarIntDefault("bo2_zm_bots_count", 8);
+    // if(bot_amount > (8-get_players().size))
+    //     bot_amount = 8 - get_players().size;
 
     iprintln("^2Spawning " + bot_amount + " bots...");
 
@@ -796,8 +794,9 @@ bot_main()
 
 	self thread bot_wakeup_think();
 	self thread bot_damage_think();
-	self thread bot_give_ammo();
+	// self thread bot_give_ammo();
 	self thread bot_reset_flee_goal();
+    self thread bot_manage_ammo();
     // If on Origins map, handle generator purchases
     if (level.script == "zm_tomb")
         self thread bot_origins_think();
@@ -849,8 +848,8 @@ bot_buy_perks()
         if(self maps\mp\zombies\_zm_laststand::player_is_in_laststand())
             return;
             
-        perks = array("specialty_armorvest", "specialty_quickrevive", "specialty_fastreload", "specialty_rof");
-        costs = array(2500, 1500, 3000, 2000);
+        perks = array("specialty_armorvest", "specialty_quickrevive", "specialty_fastreload", "specialty_rof", "specialty_longersprint", "specialty_deadshot","specialty_additionalprimaryweapon");
+        costs = array(2500, 1500, 3000, 2000, 2000, 1500, 4000);
         
         // Only get nearby machines within 350 units
         machines = GetEntArray("zombie_vending", "targetname");
@@ -922,10 +921,70 @@ bot_teleport_think()
 	self endon("death");
 	self endon("disconnect");
 	level endon("end_game");
+	
 	players = get_players();
-	if(Distance(self.origin, players[0].origin) > 1500 && players[0] IsOnGround())
+	if(players.size == 0) // Ensure there's at least one player
+		return;
+
+	// Get the host player or first player as reference
+	host_player = undefined;
+	foreach(player in players)
 	{
-		self SetOrigin(players[0].origin + (0,50,0));
+		if(player != self && !player maps\mp\zombies\_zm_laststand::player_is_in_laststand())
+		{
+			host_player = player;
+			break;
+		}
+	}
+	
+	if(!isDefined(host_player))
+		return;
+		
+	// Check if bot is too far from host
+	if(Distance(self.origin, host_player.origin) > 1500 && host_player IsOnGround())
+	{
+		// Try to find a valid node near the host player
+		safe_node = GetNearestNode(host_player.origin);
+		
+		if(isDefined(safe_node))
+		{
+			// Check if node is on navmesh and accessible
+			if(NodeVisible(safe_node.origin, host_player.origin))
+			{
+				// Teleport to the safe node
+				self SetOrigin(safe_node.origin);
+				// Make bot look at the player
+				self SetPlayerAngles(VectorToAngles(host_player.origin - self.origin));
+				//iprintln("^3Bot teleported to safe node");
+				return;
+			}
+		}
+		
+		// If no safe node found, try to find any valid position near the player
+		test_positions = array();
+		test_positions[0] = host_player.origin + (50, 0, 0);
+		test_positions[1] = host_player.origin + (0, 50, 0);
+		test_positions[2] = host_player.origin + (-50, 0, 0);
+		test_positions[3] = host_player.origin + (0, -50, 0);
+		
+		foreach(pos in test_positions)
+		{
+			// Try to find a path to validate the position
+			if(SightTracePassed(pos, pos + (0, 0, 50), false, undefined) && 
+			   !SightTracePassed(pos, pos - (0, 0, 50), false, undefined))
+			{
+				// Position is valid - above ground but not inside ceiling
+				self SetOrigin(pos);
+				self SetPlayerAngles(VectorToAngles(host_player.origin - self.origin));
+				//iprintln("^3Bot teleported to offset position");
+				return;
+			}
+		}
+		
+		// Last resort - teleport directly to player with small height offset
+		// This is risky but better than being stuck far away
+		self SetOrigin(host_player.origin + (0, 0, 5));
+		//iprintln("^1Bot teleported directly to player (fallback)");
 	}
 }
 
@@ -1001,33 +1060,105 @@ bot_check_player_blocking()
     
     while(1)
     {
+        wait 0.15; // Slightly reduced check frequency for better performance
+        
+        // Skip checks if bot is in last stand
+        if(self maps\mp\zombies\_zm_laststand::player_is_in_laststand())
+            continue;
+            
         foreach(player in get_players())
         {
-            if(player == self || !isPlayer(player))
+            if(player == self || !isPlayer(player) || player maps\mp\zombies\_zm_laststand::player_is_in_laststand())
                 continue;
                 
             // Check if bot is too close to player and potentially blocking
-            if(Distance(self.origin, player.origin) < 40)
+            distance_sq = DistanceSquared(self.origin, player.origin);
+            if(distance_sq < 1600) // Square of 40
             {
-                // Get direction vector from bot to player
+                // Calculate direction to move away from player
                 dir = VectorNormalize(self.origin - player.origin);
                 
-                // Move bot away from player
-                new_pos = self.origin + (dir * 50);
-                
-                // Verify new position is valid before moving
-                if(FindPath(self.origin, new_pos, undefined, 0, 1))
+                // Try different ways to move the bot away safely
+                // Method 1: Use AddGoal to navigate properly
+                if(!self hasgoal("avoid_player"))
                 {
-                    self SetOrigin(new_pos);
-                    // Cancel current goal to prevent bot from moving back
-                    if(self hasgoal("doorBuy") || self hasgoal("weaponBuy"))
+                    // Try to find a valid position in the direction away from player
+                    try_pos = self.origin + (dir * 60);
+                    
+                    // Check for valid path to new position
+                    if(FindPath(self.origin, try_pos, undefined, 0, 1))
                     {
-                        self cancelgoal(self getgoal("doorBuy") ? "doorBuy" : "weaponBuy");
+                        self AddGoal(try_pos, 20, 2, "avoid_player"); // Higher priority
+                        wait 0.5; // Give bot time to start moving
+                        continue;
+                    }
+                    
+                    // Method 2: Look for nearby node if direct movement failed
+                    nearest_node = GetNearestNode(self.origin);
+                    if(isDefined(nearest_node))
+                    {
+                        // Try to find nodes away from the player
+                        nodes = GetNodesInRadius(self.origin, 200, 0);
+                        best_node = undefined;
+                        best_dist = 0;
+                        
+                        if(isDefined(nodes) && nodes.size > 0)
+                        {
+                            foreach(node in nodes)
+                            {
+                                // Calculate which node is furthest from player but still reachable
+                                if(NodeVisible(nearest_node.origin, node.origin))
+                                {
+                                    node_to_player_dist = Distance(node.origin, player.origin);
+                                    if(node_to_player_dist > best_dist)
+                                    {
+                                        best_node = node;
+                                        best_dist = node_to_player_dist;
+                                    }
+                                }
+                            }
+                            
+                            // If we found a good node, move there
+                            if(isDefined(best_node))
+                            {
+                                self AddGoal(best_node.origin, 20, 2, "avoid_player");
+                                wait 0.5; // Give bot time to start moving
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    // Method 3 (fallback): Small teleport as last resort, but only if on ground
+                    if(self IsOnGround())
+                    {
+                        // Verify new position is valid before moving
+                        new_pos = self.origin + (dir * 50);
+                        
+                        // Do trace checks to make sure we're not teleporting into walls
+                        if(!SightTracePassed(new_pos, new_pos + (0, 0, 30), true, self) && 
+                           SightTracePassed(new_pos, new_pos - (0, 0, 50), false, self))
+                        {
+                            // Cancel any door/weapon purchase goals to prevent getting stuck again
+                            goal_names = array("doorBuy", "weaponBuy", "boxBuy", "papBuy");
+                            foreach(goal_name in goal_names)
+                            {
+                                if(self hasgoal(goal_name))
+                                    self cancelgoal(goal_name);
+                            }
+                            
+                            // Teleport as last resort
+                            self SetOrigin(new_pos);
+                        }
                     }
                 }
             }
+            else
+            {
+                // If far enough, cancel avoid goal
+                if(self hasgoal("avoid_player"))
+                    self cancelgoal("avoid_player");
+            }
         }
-        wait 0.1; // Check every 100ms
     }
 }
 
@@ -1244,7 +1375,7 @@ bot_buy_wallbuy()
 	wallbuys = array_randomize(level._spawned_wallbuys);
 	foreach(wallbuy in wallbuys)
 	{
-		if(Distance(wallbuy.origin, self.origin) < 400 && wallbuy.trigger_stub.cost <= self.score && bot_best_gun(wallbuy.trigger_stub.zombie_weapon_upgrade, weapon) && FindPath(self.origin, wallbuy.origin, undefined, 0, 1) && weapon != wallbuy.trigger_stub.zombie_weapon_upgrade && !is_offhand_weapon( wallbuy.trigger_stub.zombie_weapon_upgrade ))
+		if(Distance(wallbuy.origin, self.origin) < 400 && wallbuy.trigger_stub.cost <= self.score && bot_best_gun(wallbuy.trigger_stub.zombie_weapon_upgrade, weapon) && FindPath(self.origin, wallbuy.origin, undefined, 0, 1) && weapon != wallbuy.trigger_stub.zombie_weapon_upgrade && !is_offhand_weapon( wallbuy.trigger_stub.zombie_weapon_upgrade  ))
 		{
 			if(!isdefined(wallbuy.trigger_stub))
 				return;
@@ -1936,6 +2067,7 @@ bot_should_take_weapon(boxWeapon, currentWeapon)
        IsSubStr(boxWeapon, "launcher") || 
        IsSubStr(boxWeapon, "knife") || 
        (IsSubStr(boxWeapon, "ballistic") && !IsSubStr(boxWeapon, "ballistic_knife")))
+
     {
         return (randomfloat(1) < 0.15); // 15% chance
     }
@@ -2057,4 +2189,241 @@ bot_should_take_weapon(boxWeapon, currentWeapon)
     
     // Default case - 50/50 chance
     return (randomfloat(1) < 0.5);
+}
+
+
+// Helper function to get Dvar value with a default
+GetDvarIntDefault(dvarName, defaultValue)
+{
+    if(GetDvar(dvarName) == "")
+        return defaultValue;
+    return GetDvarInt(dvarName);
+}
+
+// Main function to manage bot ammo based on Dvar setting
+bot_manage_ammo()
+{
+    self endon("disconnect");
+    self endon("death");
+    level endon("game_ended");
+
+    // Wait for the bot to be fully initialized
+    wait 1;
+
+    // Dvar to control infinite ammo (1 = enabled, 0 = disabled)
+    // Default to enabled (1) if Dvar is not set
+    infinite_ammo_enabled = GetDvarIntDefault("bo2_zm_bots_infinite_ammo", 0);
+
+    if (infinite_ammo_enabled == 1)
+    {
+        // If infinite ammo is enabled, run the max ammo loop
+        self thread bot_give_max_ammo_loop();
+    }
+    else
+    {
+        // If infinite ammo is disabled, run the ammo buying loop
+        self thread bot_buy_ammo_loop();
+    }
+}
+
+// Loop to continuously give max ammo if infinite ammo is enabled
+bot_give_max_ammo_loop()
+{
+    self endon("disconnect");
+    self endon("death");
+    level endon("game_ended");
+
+    while(true)
+    {
+        primary_weapons = self GetWeaponsListPrimaries();
+        foreach(weapon in primary_weapons)
+        {
+            // Only give ammo to non-wonder weapons to avoid potential issues
+            if (!IsSubStr(weapon, "raygun") && !IsSubStr(weapon, "thunder") &&
+                !IsSubStr(weapon, "wave") && !IsSubStr(weapon, "mark2") &&
+                !IsSubStr(weapon, "tesla") && !IsSubStr(weapon, "staff")) // Add other wonder weapons if needed
+            {
+                self GiveMaxAmmo(weapon);
+            }
+        }
+        wait 1; // Check every second
+    }
+}
+
+// Loop for bots to buy ammo from wall weapons if infinite ammo is disabled
+bot_buy_ammo_loop()
+{
+    self endon("disconnect");
+    self endon("death");
+    level endon("game_ended");
+
+    // Debug: Confirm the loop started for this bot
+    // iprintln("^5DEBUG: " + self.name + " started bot_buy_ammo_loop");
+
+    while(true)
+    {
+        // Check periodically
+        wait randomfloatrange(3.0, 5.0);
+
+        // Debug: Check if the loop is still running
+        // iprintln("^5DEBUG: " + self.name + " checking ammo status...");
+
+        // Don't try to buy ammo if downed or interacting with something critical
+        if (self maps\mp\zombies\_zm_laststand::player_is_in_laststand() ||
+            self hasgoal("revive") || self hasgoal("boxBuy") ||
+            self hasgoal("papBuy") || self hasgoal("doorBuy") ||
+            self hasgoal("debrisClear") || self hasgoal("generator"))
+        {
+            // Debug: Show why the bot isn't buying ammo
+            // iprintln("^5DEBUG: " + self.name + " skipping ammo buy (downed or busy)");
+            continue;
+        }
+
+        currentWeapon = self GetCurrentWeapon();
+        if (!IsDefined(currentWeapon) || currentWeapon == "none")
+        {
+            // Debug: Show if weapon is invalid
+            // iprintln("^5DEBUG: " + self.name + " skipping ammo buy (invalid weapon: " + currentWeapon + ")");
+            continue;
+        }
+
+        // Skip weapons that typically don't get wall ammo
+        if (IsSubStr(currentWeapon, "knife") || IsSubStr(currentWeapon, "grenade") || IsSubStr(currentWeapon, "equip") ||
+            IsSubStr(currentWeapon, "raygun") || IsSubStr(currentWeapon, "thunder") || IsSubStr(currentWeapon, "wave") ||
+            IsSubStr(currentWeapon, "mark2") || IsSubStr(currentWeapon, "tesla") || IsSubStr(currentWeapon, "staff"))
+        {
+            // Debug: Show if weapon is skipped type
+            // iprintln("^5DEBUG: " + self.name + " skipping ammo buy (weapon type not buyable: " + currentWeapon + ")");
+            continue;
+        }
+
+        clipAmmo = self GetWeaponAmmoClip(currentWeapon);
+        stockAmmo = self GetWeaponAmmoStock(currentWeapon);
+        maxStockAmmo = WeaponMaxAmmo(currentWeapon);
+
+        // Debug: Show current ammo status
+        // iprintln("^5DEBUG: " + self.name + " Weapon: " + currentWeapon + " Stock: " + stockAmmo + "/" + maxStockAmmo);
+
+        // Check if ammo is low (e.g., below 20% of max stock)
+        if (IsDefined(maxStockAmmo) && maxStockAmmo > 0 && (stockAmmo < (maxStockAmmo * 0.20)))
+        {
+            // Debug: Confirm ammo is low
+            // iprintln("^5DEBUG: " + self.name + " Ammo low for " + currentWeapon);
+
+            // Find the wallbuy trigger for this weapon
+            wallbuy = find_wallbuy_for_weapon(currentWeapon);
+
+            if (IsDefined(wallbuy))
+            {
+                // Debug: Confirm wallbuy found
+                // iprintln("^5DEBUG: " + self.name + " Found wallbuy for " + currentWeapon + " at " + wallbuy.origin);
+
+                ammo_cost = int(wallbuy.trigger_stub.cost / 2);
+
+                // Check if bot can afford it
+                if (self.score >= ammo_cost)
+                {
+                    // Debug: Confirm bot can afford ammo
+                    // iprintln("^5DEBUG: " + self.name + " Can afford ammo (Cost: " + ammo_cost + ", Score: " + self.score + ")");
+
+                    dist_sq = DistanceSquared(self.origin, wallbuy.origin);
+                    interaction_dist_sq = 10000; // Within 100 units
+
+                    // If close enough, buy ammo
+                    if (dist_sq < interaction_dist_sq)
+                    {
+                        // Debug: Confirm bot is close enough to buy
+                        // iprintln("^5DEBUG: " + self.name + " Attempting to buy ammo for " + currentWeapon);
+                        // ... (rest of the buying logic) ...
+                        self maps\mp\zombies\_zm_score::minus_to_player_score(ammo_cost);
+                        self GiveMaxAmmo(currentWeapon);
+                        self PlaySound("zmb_cha_ching");
+                        wait 2.0;
+                    }
+                    // If not close enough, move towards it
+                    else if (dist_sq < 400000) // Within 632 units
+                    {
+                        // Debug: Confirm bot is moving towards wallbuy
+                        // iprintln("^5DEBUG: " + self.name + " Moving towards wallbuy for " + currentWeapon);
+                        // ... (rest of the pathing logic) ...
+                        if (!self hasgoal("ammoBuy") || Distance(self GetGoal("ammoBuy"), wallbuy.origin) > 100)
+                        {
+                            if (FindPath(self.origin, wallbuy.origin, undefined, 0, 1))
+                            {
+                                self AddGoal(wallbuy.origin, 75, 1, "ammoBuy");
+                            }
+                            else
+                            {
+                                // Debug: Show if path not found
+                                // iprintln("^1DEBUG: " + self.name + " Path not found to wallbuy at " + wallbuy.origin);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Debug: Show if wallbuy is too far
+                        // iprintln("^5DEBUG: " + self.name + " Wallbuy too far for " + currentWeapon + " (DistSq: " + dist_sq + ")");
+                    }
+                }
+                else
+                {
+                    // Debug: Show if bot cannot afford ammo
+                    // iprintln("^5DEBUG: " + self.name + " Cannot afford ammo for " + currentWeapon + " (Cost: " + ammo_cost + ", Score: " + self.score + ")");
+                }
+            }
+            else
+            {
+                // Debug: Show if wallbuy not found
+                // iprintln("^5DEBUG: " + self.name + " No wallbuy found for " + currentWeapon);
+            }
+        }
+        else
+        {
+             // Debug: Show if ammo is not low
+            //  iprintln("^5DEBUG: " + self.name + " Ammo OK for " + currentWeapon);
+             if (self hasgoal("ammoBuy"))
+             {
+                 self cancelgoal("ammoBuy");
+             }
+        }
+    }
+}
+
+find_wallbuy_for_weapon(weapon_name)
+{
+    if (!IsDefined(level._spawned_wallbuys))
+        return undefined;
+
+    closest_wallbuy = undefined;
+    closest_dist_sq = 99999999; // Initialize with a large value
+
+    foreach(wallbuy in level._spawned_wallbuys)
+    {
+        // Basic validation checks
+        if (!IsDefined(wallbuy) || !IsDefined(wallbuy.trigger_stub) || !IsDefined(wallbuy.trigger_stub.zombie_weapon_upgrade) || !IsDefined(wallbuy.origin))
+            continue;
+
+        // Check if the wallbuy matches the base weapon name
+        base_match = (wallbuy.trigger_stub.zombie_weapon_upgrade == weapon_name);
+
+        // Check if the wallbuy matches the upgraded version of the weapon
+        upgraded_name = maps\mp\zombies\_zm_weapons::get_upgrade_weapon(wallbuy.trigger_stub.zombie_weapon_upgrade);
+        upgrade_match = (IsDefined(upgraded_name) && upgraded_name == weapon_name);
+
+        if (base_match || upgrade_match)
+        {
+            // Find the closest matching wallbuy to the bot
+            dist_sq = DistanceSquared(self.origin, wallbuy.origin);
+            if (dist_sq < closest_dist_sq)
+            {
+                // Basic visibility check (optional but can help)
+                // if (SightTracePassed(self.origin + (0,0,50), wallbuy.origin + (0,0,10), false, self))
+                // {
+                    closest_dist_sq = dist_sq;
+                    closest_wallbuy = wallbuy;
+                // }
+            }
+        }
+    }
+    return closest_wallbuy; // Return the closest valid wallbuy found
 }

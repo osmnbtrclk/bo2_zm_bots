@@ -39,7 +39,7 @@ array_combine(array1, array2)
 
 init()
 {
-    // level.player_starting_points = 550 * 400;
+    level.player_starting_points = 550 * 400;
     bot_set_skill();
     
     
@@ -173,10 +173,10 @@ bot_buy_box()
         if(self maps\mp\zombies\_zm_laststand::player_is_in_laststand())
             return;
 
-        // Don't try if we can't afford it
+        // Don't try if we can't afford it (use 950 cost)
         if(self.score < 950)
             return;
-        
+
         // Check global box usage tracker to prevent multiple bots using box simultaneously
         if(isDefined(level.box_in_use_by_bot) && level.box_in_use_by_bot != self)
         {
@@ -184,299 +184,259 @@ bot_buy_box()
             return;
         }
 
-        // First check if we can pick up a weapon from an already open box
+        // Check global cooldown to prevent box from moving too quickly
+        if(isDefined(level.last_bot_box_interaction_time) && (GetTime() - level.last_bot_box_interaction_time < 30000)) // 30 sec global cooldown
+            return;
+
+        // Personal cooldown to prevent the same bot from constantly using the box
+        if(isDefined(self.bot.last_box_interaction_time) && (GetTime() - self.bot.last_box_interaction_time < 15000)) // 15 sec personal cooldown
+            return;
+
+        // --- Start: Logic to grab from an already open box (Kept from original) ---
         if(!isDefined(self.bot.grab_weapon_time) || GetTime() > self.bot.grab_weapon_time)
         {
             activeBox = undefined;
-            
-            // Find an open box with a weapon ready to grab
+            closestOpenBoxDist = 99999;
+
+            // Find the closest open box with a weapon ready to grab
             foreach(box in level.chests)
             {
                 if(!isDefined(box))
                     continue;
-                    
+
                 // Check if the box is open with a weapon ready
-                if(isDefined(box._box_open) && box._box_open && 
+                if(isDefined(box._box_open) && box._box_open &&
                    isDefined(box.weapon_out) && box.weapon_out &&
                    isDefined(box.zbarrier) && isDefined(box.zbarrier.weapon_model))
                 {
                     dist = Distance(self.origin, box.origin);
-                    if(dist < 150) // Only attempt if we're close enough
+                    if(dist < closestOpenBoxDist)
                     {
-                        activeBox = box;
-                        break;
-                    }
-                    else if(dist < 500) // Otherwise move closer
-                    {
-                        // Check for valid path
+                        // Check if path exists before considering it
                         if(FindPath(self.origin, box.origin, undefined, 0, 1))
                         {
-                            self AddGoal(box.origin, 75, 3, "boxGrab");
-                            return;
+                            closestOpenBoxDist = dist;
+                            activeBox = box;
                         }
                     }
                 }
             }
-            
-            // If we found an open box with a weapon and we're close enough
+
+            // If we found an open box with a weapon
             if(isDefined(activeBox))
             {
-                // Cancel any existing goal
-                if(self hasgoal("boxGrab"))
-                    self cancelgoal("boxGrab");
-                    
-                // Mark that we're trying to grab the weapon
-                self.bot.grab_weapon_time = GetTime() + 5000;
-                
-                // Look at the box with human-like slight aim jitter
-                aim_offset = (randomfloatrange(-5,5), randomfloatrange(-5,5), randomfloatrange(-5,5));
-                self lookat(activeBox.origin + aim_offset);
-                
-                // Wait a bit before grabbing (simulating human reaction time)
-                wait randomfloatrange(0.3, 0.8);
-                
-                // Make sure the box and weapon are still valid after waiting
-                if(!isDefined(activeBox) || 
-                   !isDefined(activeBox._box_open) || 
-                   !activeBox._box_open || 
-                   !isDefined(activeBox.weapon_out) || 
-                   !activeBox.weapon_out)
+                // If close enough, grab it
+                if(closestOpenBoxDist < 100) // Interaction distance
                 {
-                    return;
-                }
-                
-                // Get current weapon for weapon quality comparison
-                currentWeapon = self GetCurrentWeapon();
-                boxWeapon = activeBox.zbarrier.weapon_string;
-                shouldTake = false;
-                
-                // Weapon decision logic - improved weapon selection
-                if(isDefined(boxWeapon))
-                {
-                    shouldTake = bot_should_take_weapon(boxWeapon, currentWeapon);
-                }
-                else
-                {
-                    // If weapon can't be determined, 60% chance to take it
-                    shouldTake = (randomfloat(1) < 0.6);
-                }
-                
-                // Simulate grabbing the weapon based on decision
-                if(shouldTake)
-                {
-                    // Try multiple box interaction methods to ensure it works
-                    if(isDefined(activeBox.unitrigger_stub) && isDefined(activeBox.unitrigger_stub.trigger))
+                    // Cancel any existing goal
+                    if(self hasgoal("boxGrab") || self hasgoal("boxBuy"))
                     {
-                        activeBox.unitrigger_stub.trigger notify("trigger", self);
+                        self cancelgoal("boxGrab");
+                        self cancelgoal("boxBuy");
                     }
-                    else if(isDefined(activeBox.zbarrier) && isDefined(activeBox.zbarrier.weapon_string))
+
+                    // Mark that we're trying to grab the weapon
+                    self.bot.grab_weapon_time = GetTime() + 5000; // Cooldown before trying to grab again
+
+                    // Look at the box
+                    aim_offset = (randomfloatrange(-5,5), randomfloatrange(-5,5), randomfloatrange(-5,5));
+                    self lookat(activeBox.origin + aim_offset);
+                    wait randomfloatrange(0.3, 0.8); // Simulate reaction
+
+                    // Re-validate box state
+                    if(!isDefined(activeBox) || !isDefined(activeBox._box_open) || !activeBox._box_open ||
+                       !isDefined(activeBox.weapon_out) || !activeBox.weapon_out ||
+                       self maps\mp\zombies\_zm_laststand::player_is_in_laststand())
                     {
-                        // Give weapon directly to avoid box interaction bugs
-                        self TakeWeapon(currentWeapon);
-                        self GiveWeapon(boxWeapon);
-                        self SwitchToWeapon(boxWeapon);
-                        self SetSpawnWeapon(boxWeapon);
-                        
-                        // End the box weapon state
-                        if(isDefined(activeBox))
+                        return; // State changed, abort grab
+                    }
+
+                    // --- Weapon Decision Logic ---
+                    currentWeapon = self GetCurrentWeapon();
+                    boxWeapon = activeBox.zbarrier.weapon_string;
+                    shouldTake = bot_should_take_weapon(boxWeapon, currentWeapon);
+                    // --- End Weapon Decision Logic ---
+
+                    if(shouldTake)
+                    {
+                        // Use the reliable direct give method from monitor function
+                        if(isDefined(boxWeapon) && !self HasWeapon(boxWeapon))
                         {
+                            primaries = self GetWeaponsListPrimaries();
+                            if(primaries.size >= 2)
+                            {
+                                dropWeapon = currentWeapon; // Default to dropping current
+                                // Find a non-wonder weapon to drop if possible
+                                foreach(weapon in primaries)
+                                {
+                                    if(weapon != currentWeapon && !IsSubStr(weapon, "raygun") && !IsSubStr(weapon, "thunder") && !IsSubStr(weapon, "wave") && !IsSubStr(weapon, "tesla") && !IsSubStr(weapon, "staff"))
+                                    {
+                                        dropWeapon = weapon;
+                                        break;
+                                    }
+                                }
+                                self TakeWeapon(dropWeapon);
+                            }
+                            self GiveWeapon(boxWeapon);
+                            self SwitchToWeapon(boxWeapon);
+                            self SetSpawnWeapon(boxWeapon);
+                            activeBox.weapon_out = 0; // Mark as taken
                             activeBox notify("weapon_grabbed");
-                            activeBox.weapon_out = 0;
+                            self PlaySound("zmb_weap_pickup");
+                        }
+                        else // Fallback trigger if direct give fails or weapon unknown
+                        {
+                             if(isDefined(activeBox.unitrigger_stub) && isDefined(activeBox.unitrigger_stub.trigger))
+                                activeBox.unitrigger_stub.trigger notify("trigger", self);
+                             else
+                                activeBox notify("trigger", self);
                         }
                     }
                     else
                     {
-                        // Last resort, try to interact with the box directly
-                        activeBox notify("trigger", self);
+                        // Bot decided not to take, add longer cooldown
+                        self.bot.grab_weapon_time = GetTime() + 7000;
                     }
-                    
-                    // Set spawn weapon to remember this is our weapon
-                    if(isDefined(boxWeapon))
-                    {
-                        self SetSpawnWeapon(boxWeapon);
-                        
-                        // Satisfaction feedback for good weapons
-                        if(IsSubStr(boxWeapon, "raygun") || IsSubStr(boxWeapon, "thunder"))
-                        {
-                            // Random celebration for getting a good weapon (crouch/stand)
-                            if(randomfloat(1) > 0.5)
-                            {
-                                self botaction(BOT_ACTION_STAND);
-                                wait 0.2;
-                                self botaction(BOT_ACTION_CROUCH);
-                                wait 0.2;
-                                self botaction(BOT_ACTION_STAND);
-                            }
-                        }
-                    }
-                    
-                    // Play take sound effect
-                    self PlaySound("zmb_weap_pickup");
+
+                    // Set last interaction time
+                    self.bot.last_box_interaction_time = GetTime();
+                    if(isDefined(activeBox.chest_user) && activeBox.chest_user == self)
+                        activeBox.chest_user = undefined;
+
+                    return; // Finished grab attempt
                 }
-                else
+                // If not close enough, move towards it
+                else if (closestOpenBoxDist < 500) // Detection range
                 {
-                    // Bot decided to ignore this weapon - wait before trying again
-                    self.bot.grab_weapon_time = GetTime() + 7000;
+                    if(!self hasgoal("boxGrab")) // Only set goal if not already moving
+                    {
+                         self AddGoal(activeBox.origin, 75, 3, "boxGrab"); // High priority grab goal
+                    }
+                    return; // Wait until closer
                 }
-                
-                // Set last interaction time to prevent excessive box usage
-                self.bot.last_box_interaction_time = GetTime();
-                
-                // Clear the box user state if we were the one using it
-                if(activeBox.chest_user == self)
-                    activeBox.chest_user = undefined;
-                
-                return;
             }
         }
+        // --- End: Logic to grab from an already open box ---
 
-        // If we got here, there was no weapon to grab, so try to open the box
-        
-        // We need to check if we already paid for the box and it's processing
-        if(isDefined(self.bot.waiting_for_box_animation) && self.bot.waiting_for_box_animation)
+
+        // --- Start: Logic to buy a new box spin (Based on user request) ---
+
+        // Check if we already paid and are waiting for the animation
+        if(is_true(self.bot.waiting_for_box_animation))
         {
-            // If we've been waiting too long for the box to open, reset state
-            if((!isDefined(self.bot.box_payment_time) || (GetTime() - self.bot.box_payment_time > 5000)))
+            // Add a timeout check in case monitor thread fails
+            if((!isDefined(self.bot.box_payment_time) || (GetTime() - self.bot.box_payment_time > 10000))) // 10 second timeout
             {
                 self.bot.waiting_for_box_animation = undefined;
                 self.bot.current_box = undefined;
-                // Clear global usage flag if we were the one using it
                 if(level.box_in_use_by_bot == self)
                     level.box_in_use_by_bot = undefined;
             }
             else
             {
-                // Still waiting for animation, don't try to buy again
-                return;
+                return; // Still waiting, do nothing
             }
         }
 
-        // Check global cooldown to prevent box from moving too quickly
-        if(isDefined(level.last_bot_box_interaction_time) && (GetTime() - level.last_bot_box_interaction_time < 30000))
-            return;
-            
-        // Personal cooldown to prevent the same bot from constantly using the box
-        if(isDefined(self.bot.last_box_interaction_time) && (GetTime() - self.bot.last_box_interaction_time < 15000))
+        // Make sure boxes exist and index is valid
+        if(!isDefined(level.chests) || level.chests.size == 0 || !isDefined(level.chest_index) || level.chest_index >= level.chests.size)
             return;
 
-        // Make sure boxes exist
-        if(!isDefined(level.chests) || level.chests.size == 0)
+        // Get the currently active box based on index
+        current_box = level.chests[level.chest_index];
+        if(!isDefined(current_box) || !isDefined(current_box.origin))
             return;
 
-        closestBox = undefined;
-        closestDist = 99999;
-
-        // Find the nearest accessible box
-        foreach(box in level.chests)
+        // Check if box is available (not open, not moving, not locked, not teddy'd)
+        if(is_true(current_box._box_open) ||
+           flag("moving_chest_now") ||
+           (isDefined(current_box.is_locked) && current_box.is_locked) ||
+           (isDefined(current_box.chest_user) && current_box.chest_user != self) ||
+           (isDefined(level.mystery_box_teddy_locations) && array_contains(level.mystery_box_teddy_locations, current_box.origin))) // Avoid teddy locations
         {
-            if(!isDefined(box) || !isDefined(box.origin))
-                continue;
-                
-            // Skip locked boxes
-            if(isDefined(box.is_locked) && box.is_locked)
-                continue;
+            return; // Box is not available
+        }
 
-            // Skip boxes that are already open
-            if(isDefined(box._box_open) && box._box_open)
-                continue;
-                
-            // Skip boxes already in use
-            if(isDefined(box.chest_user) && box.chest_user != self)
-                continue;
+        dist = Distance(self.origin, current_box.origin);
+        interaction_dist = 100; // Distance to interact
+        detection_dist = 500; // Distance to start moving towards
 
-            // Only use the active box or fire sale boxes
-            if(box == level.chests[level.chest_index] || 
-               (isDefined(level.zombie_vars["zombie_powerup_fire_sale_on"]) && 
-                level.zombie_vars["zombie_powerup_fire_sale_on"] == 1))
+        // Only try to use box if we have enough points and it's reasonably close
+        if(self.score >= 950 && dist < detection_dist)
+        {
+            // Check if a path exists
+            if(FindPath(self.origin, current_box.origin, undefined, 0, 1))
             {
-                dist = Distance(self.origin, box.origin);
-                if(dist < closestDist)
+                // Move to box if not already close enough
+                if(dist > interaction_dist)
                 {
-                    closestBox = box;
-                    closestDist = dist;
+                    // Only set goal if not already pathing to this box
+                    if(!self hasgoal("boxBuy") || Distance(self GetGoal("boxBuy"), current_box.origin) > 50)
+                    {
+                        self AddGoal(current_box.origin, 75, 2, "boxBuy"); // Normal priority buy goal
+                    }
+                    return; // Wait until closer
                 }
+
+                // --- Use the box when close enough ---
+                if(self hasgoal("boxBuy")) // Cancel movement goal upon arrival
+                    self cancelgoal("boxBuy");
+
+                // Look at the box
+                aim_offset = (randomfloatrange(-5,5), randomfloatrange(-5,5), randomfloatrange(-5,5));
+                self lookat(current_box.origin + aim_offset);
+                wait randomfloatrange(0.5, 1.0); // Simulate reaction
+
+                // Final check before spending points
+                if(self.score < 950 ||
+                   is_true(current_box._box_open) ||
+                   flag("moving_chest_now") ||
+                   (isDefined(current_box.is_locked) && current_box.is_locked) ||
+                   (isDefined(current_box.chest_user) && current_box.chest_user != self) ||
+                   self maps\mp\zombies\_zm_laststand::player_is_in_laststand())
+                {
+                    return; // Conditions changed, abort
+                }
+
+                // Set global usage flag
+                level.box_in_use_by_bot = self;
+                current_box.chest_user = self; // Mark user on the box
+
+                // Store state for monitoring
+                self.bot.current_box = current_box;
+                self.bot.waiting_for_box_animation = true;
+                self.bot.box_payment_time = GetTime();
+
+                // Deduct points
+                self maps\mp\zombies\_zm_score::minus_to_player_score(950);
+                self PlaySound("zmb_cha_ching");
+
+                // Set cooldown times
+                self.bot.last_box_interaction_time = GetTime();
+                level.last_bot_box_interaction_time = GetTime();
+
+                // Trigger the box using multiple methods for reliability
+                if(isDefined(current_box.unitrigger_stub) && isDefined(current_box.unitrigger_stub.trigger))
+                    current_box.unitrigger_stub.trigger notify("trigger", self);
+                else if(isDefined(current_box.use_trigger))
+                     current_box.use_trigger notify("trigger", self);
+                else
+                    current_box notify("trigger", self); // Generic trigger
+
+                // Start the monitor thread (handles waiting and weapon grabbing/decision)
+                self thread bot_monitor_box_animation(current_box);
+
+                return; // Monitor thread will handle the rest
             }
         }
 
-        // If no valid box was found or it's too far away
-        if(!isDefined(closestBox) || closestDist > 500)
-            return;
-
-        // Move closer if not already near the box
-        if(closestDist > 100)
+        // Clean up any remaining box goal if we decided not to proceed
+        if(self hasgoal("boxBuy") || self hasgoal("boxGrab"))
         {
-            // Check for valid path
-            if(FindPath(self.origin, closestBox.origin, undefined, 0, 1))
-            {
-                self AddGoal(closestBox.origin, 75, 2, "boxBuy");
-                return;
-            }
-        }
-        
-        // Look at the box with slight aim jitter
-        aim_offset = (randomfloatrange(-5,5), randomfloatrange(-5,5), randomfloatrange(-5,5));
-        self lookat(closestBox.origin + aim_offset);
-
-        // Wait a bit before purchase to mimic human reaction
-        wait randomfloatrange(0.5, 1.0);
-
-        // Check again if the box is still valid after waiting
-        if(!isDefined(closestBox) || 
-           (isDefined(closestBox._box_open) && closestBox._box_open) || 
-           self maps\mp\zombies\_zm_laststand::player_is_in_laststand() || 
-           self.score < 950)
-            return;
-
-        // Cancel current goal to prevent movement during interaction
-        if(self hasgoal("boxBuy"))
             self cancelgoal("boxBuy");
-
-        // Set global box usage flag to prevent other bots from using the box simultaneously
-        level.box_in_use_by_bot = self;
-        
-        // Store the box we're using to check for successful activation
-        self.bot.current_box = closestBox;
-        self.bot.waiting_for_box_animation = true;
-        self.bot.box_payment_time = GetTime();
-        
-        // Set the player as the box user
-        closestBox.chest_user = self;
-        
-        // Deduct points AFTER we've verified everything is good to go
-        self maps\mp\zombies\_zm_score::minus_to_player_score(950);
-
-        // Try all possible ways to trigger the box properly
-        if(isDefined(closestBox.unitrigger_stub) && isDefined(closestBox.unitrigger_stub.trigger))
-        {
-            closestBox.unitrigger_stub.trigger notify("trigger", self);
+            self cancelgoal("boxGrab");
         }
-        else if(isDefined(closestBox.zbarrier))
-        {
-            // Force the chest to start thinking
-            closestBox notify("trigger", self);
-            
-            // Directly start the box logic in case the trigger didn't work
-            closestBox thread maps\mp\zombies\_zm_magicbox::treasure_chest_think();
-        }
-        else
-        {
-            // Try all common trigger methods as a last resort
-            if(isDefined(closestBox.use_trigger))
-                closestBox.use_trigger notify("trigger", self);
-                
-            closestBox notify("trigger", self);
-            closestBox notify("open_chest_trigger", self);
-        }
-
-        // Play purchase sound effect
-        self PlaySound("zmb_cha_ching");
-        
-        // Set cooldown times
-        self.bot.last_box_interaction_time = GetTime();
-        level.last_bot_box_interaction_time = GetTime();
-        
-        // Start monitoring the box to see if it opened
-        self thread bot_monitor_box_animation(closestBox);
+        // --- End: Logic to buy a new box spin ---
     }
 }
 

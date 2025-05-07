@@ -39,7 +39,7 @@ array_combine(array1, array2)
 
 init()
 {
-    level.player_starting_points = 550 * 400;
+    // level.player_starting_points = 550 * 400;
     bot_set_skill();
     
     
@@ -903,8 +903,17 @@ bot_teleport_think()
 	// Check if bot is too far from host
 	if(Distance(self.origin, host_player.origin) > 1500 && host_player IsOnGround())
 	{
+        // Make bot invulnerable before teleport
+        self.ignoreme = true;
+        self.takedamage = false;
+        
+        // Make host player invulnerable too
+        host_player.ignoreme = true;
+        host_player.takedamage = false;
+        
 		// Try to find a valid node near the host player
 		safe_node = GetNearestNode(host_player.origin);
+		teleport_succeeded = false;
 		
 		if(isDefined(safe_node))
 		{
@@ -915,36 +924,85 @@ bot_teleport_think()
 				self SetOrigin(safe_node.origin);
 				// Make bot look at the player
 				self SetPlayerAngles(VectorToAngles(host_player.origin - self.origin));
+				teleport_succeeded = true;
 				//iprintln("^3Bot teleported to safe node");
-				return;
 			}
 		}
 		
 		// If no safe node found, try to find any valid position near the player
-		test_positions = array();
-		test_positions[0] = host_player.origin + (50, 0, 0);
-		test_positions[1] = host_player.origin + (0, 50, 0);
-		test_positions[2] = host_player.origin + (-50, 0, 0);
-		test_positions[3] = host_player.origin + (0, -50, 0);
-		
-		foreach(pos in test_positions)
+		if(!teleport_succeeded)
 		{
-			// Try to find a path to validate the position
-			if(SightTracePassed(pos, pos + (0, 0, 50), false, undefined) && 
-			   !SightTracePassed(pos, pos - (0, 0, 50), false, undefined))
-			{
-				// Position is valid - above ground but not inside ceiling
-				self SetOrigin(pos);
-				self SetPlayerAngles(VectorToAngles(host_player.origin - self.origin));
-				//iprintln("^3Bot teleported to offset position");
-				return;
-			}
+            test_positions = array();
+            test_positions[0] = host_player.origin + (50, 0, 0);
+            test_positions[1] = host_player.origin + (0, 50, 0);
+            test_positions[2] = host_player.origin + (-50, 0, 0);
+            test_positions[3] = host_player.origin + (0, -50, 0);
+            
+            foreach(pos in test_positions)
+            {
+                // Try to find a path to validate the position
+                if(SightTracePassed(pos, pos + (0, 0, 50), false, undefined) && 
+                   !SightTracePassed(pos, pos - (0, 0, 50), false, undefined))
+                {
+                    // Position is valid - above ground but not inside ceiling
+                    self SetOrigin(pos);
+                    self SetPlayerAngles(VectorToAngles(host_player.origin - self.origin));
+                    teleport_succeeded = true;
+                    //iprintln("^3Bot teleported to offset position");
+                    break;
+                }
+            }
 		}
 		
 		// Last resort - teleport directly to player with small height offset
-		// This is risky but better than being stuck far away
-		self SetOrigin(host_player.origin + (0, 0, 5));
-		//iprintln("^1Bot teleported directly to player (fallback)");
+		if(!teleport_succeeded)
+		{
+            // This is risky but better than being stuck far away
+            self SetOrigin(host_player.origin + (0, 0, 5));
+            //iprintln("^1Bot teleported directly to player (fallback)");
+		}
+        
+        // Give invulnerability to any players near teleport destination
+        teleport_radius = 100; // Check players within this radius
+        all_players = GetPlayers();
+        nearby_players = [];
+        
+        foreach(player in all_players)
+        {
+            if(Distance(player.origin, self.origin) < teleport_radius && player != self)
+            {
+                player.ignoreme = true;
+                player.takedamage = false;
+                nearby_players[nearby_players.size] = player;
+            }
+        }
+        
+        // Wait for a brief period of invulnerability
+        wait 2.5;
+        
+        // Restore normal state for bot
+        if(isDefined(self))
+        {
+            self.ignoreme = false;
+            self.takedamage = true;
+        }
+        
+        // Restore normal state for host player
+        if(isDefined(host_player))
+        {
+            host_player.ignoreme = false;
+            host_player.takedamage = true;
+        }
+        
+        // Restore normal state for any nearby players
+        foreach(player in nearby_players)
+        {
+            if(isDefined(player))
+            {
+                player.ignoreme = false;
+                player.takedamage = true;
+            }
+        }
 	}
 }
 
